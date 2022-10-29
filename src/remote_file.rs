@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use std::{
     convert::From,
     io::{Read, Seek},
@@ -48,19 +50,18 @@ impl RemoteFile {
     pub fn content_type(&self) -> SupportedTypes {
         self.content_type
     }
-    fn do_range_request(&mut self, range: Range<usize>) -> Result<ureq::Response, ureq::Error> {
+    async fn do_range_request(&mut self, range: Range<usize>) -> Result<ureq::Response, ureq::Error> {
         dbg!(&range);
         self.client
             .get(&self.url)
             .set(RANGE, &format!("bytes={}-{}", range.start, range.end))
             .call()
     }
-}
 
-impl Read for RemoteFile {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+    pub async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         let response = self
             .do_range_request(self.offset..self.offset + buf.len())
+            .await
             .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::Other))?;
 
         let mut vec = Vec::with_capacity(buf.len());

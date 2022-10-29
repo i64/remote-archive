@@ -1,3 +1,5 @@
+use async_trait::async_trait;
+
 use std::{
     fmt::Debug,
     io::{Read, Seek, SeekFrom},
@@ -156,7 +158,7 @@ impl ZipFile {
         }
     }
 
-    fn ensure(&mut self, size: usize) -> std::io::Result<usize> {
+    async fn ensure(&mut self, size: usize) -> std::io::Result<usize> {
         if self.buf.len() >= size {
             self.buf.fill(0);
         } else {
@@ -164,66 +166,66 @@ impl ZipFile {
             self.buf.fill(0);
         }
         self.buf_offset = 0;
-        self.file.read(&mut self.buf[0..size])
+        self.file.read(&mut self.buf[0..size]).await
     }
 
-    fn read_section(&mut self) -> std::io::Result<SectionBody> {
+    async fn read_section(&mut self) -> std::io::Result<SectionBody> {
         const STRUCT_SIZE: usize = 4;
-        self.ensure(STRUCT_SIZE)?;
+        self.ensure(STRUCT_SIZE).await?;
 
-        let magic = &self.read_bytes(2)?[..2];
+        let magic = &(self.read_bytes(2).await?)[..2];
         if MAGIC_BYTES != magic {
             return Err(std::io::ErrorKind::Unsupported.into());
         }
-        let section_type = SectionType::try_from(self.read_u16()? as usize)
+        let section_type = SectionType::try_from(self.read_u16().await? as usize)
             .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::InvalidData))?;
 
         let section_body = match section_type {
-            SectionType::CentralDirEntry => SectionBody::CentralDirEntry(self.central_dir_entry()?),
-            SectionType::LocalFile => SectionBody::LocalFile(self.local_file()?),
+            SectionType::CentralDirEntry => SectionBody::CentralDirEntry(self.central_dir_entry().await?),
+            SectionType::LocalFile => SectionBody::LocalFile(self.local_file().await?),
             SectionType::EndOfCentralDir => {
-                SectionBody::EndOfCentralDir(self.end_of_central_dir()?)
+                SectionBody::EndOfCentralDir(self.end_of_central_dir().await?)
             }
-            SectionType::DataDescriptor => SectionBody::DataDescriptor(self.data_descriptor()?),
+            SectionType::DataDescriptor => SectionBody::DataDescriptor(self.data_descriptor().await?),
         };
 
         Ok(section_body)
     }
 
-    fn data_descriptor(&mut self) -> std::io::Result<DataDescriptor> {
+    async fn data_descriptor(&mut self) -> std::io::Result<DataDescriptor> {
         const STRUCT_SIZE: usize = 3 * 4;
-        self.ensure(STRUCT_SIZE)?;
+        self.ensure(STRUCT_SIZE).await?;
 
         Ok(DataDescriptor {
-            crc32: self.read_u32()?,
-            len_body_compressed: self.read_u32()?,
-            len_body_uncompressed: self.read_u32()?,
+            crc32: self.read_u32().await?,
+            len_body_compressed: self.read_u32().await?,
+            len_body_uncompressed: self.read_u32().await?,
         })
     }
-    fn central_dir_entry(&mut self) -> std::io::Result<CentralDirEntry> {
+    async fn central_dir_entry(&mut self) -> std::io::Result<CentralDirEntry> {
         const STRUCT_SIZE: usize = 2 * 6 + 4 * 3 + 2 * 5 + 4 * 2;
-        self.ensure(STRUCT_SIZE)?;
+        self.ensure(STRUCT_SIZE).await?;
 
-        let version_made_by = self.read_u16()?;
-        let version_needed_to_extract = self.read_u16()?;
-        let flags = self.read_u16()?;
-        let compression_method = Compression::try_from(self.read_u16()? as usize)
+        let version_made_by = self.read_u16().await?;
+        let version_needed_to_extract = self.read_u16().await?;
+        let flags = self.read_u16().await?;
+        let compression_method = Compression::try_from(self.read_u16().await? as usize)
             .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::InvalidData))?;
-        let last_mod_file_time = self.read_u16()?;
-        let last_mod_file_date = self.read_u16()?;
-        let crc32 = self.read_u32()?;
-        let len_body_compressed = self.read_u32()?;
-        let len_body_uncompressed = self.read_u32()?;
-        let len_filename = self.read_u16()?;
-        let len_extra = self.read_u16()?;
-        let len_comment = self.read_u16()?;
-        let disk_number_start = self.read_u16()?;
-        let int_file_attr = self.read_u16()?;
-        let ext_file_attr = self.read_u32()?;
-        let ofs_local_header = self.read_u32()?;
+        let last_mod_file_time = self.read_u16().await?;
+        let last_mod_file_date = self.read_u16().await?;
+        let crc32 = self.read_u32().await?;
+        let len_body_compressed = self.read_u32().await?;
+        let len_body_uncompressed = self.read_u32().await?;
+        let len_filename = self.read_u16().await?;
+        let len_extra = self.read_u16().await?;
+        let len_comment = self.read_u16().await?;
+        let disk_number_start = self.read_u16().await?;
+        let int_file_attr = self.read_u16().await?;
+        let ext_file_attr = self.read_u32().await?;
+        let ofs_local_header = self.read_u32().await?;
 
-        self.ensure(len_filename as usize)?;
-        let filename = self.read_str(len_filename as usize)?;
+        self.ensure(len_filename as usize).await?;
+        let filename = self.read_str(len_filename as usize).await?;
 
         self.seek(std::io::SeekFrom::Current((len_extra + len_comment) as i64))?;
 
@@ -247,25 +249,25 @@ impl ZipFile {
             filename,
         })
     }
-    fn local_file(&mut self) -> std::io::Result<LocalFile> {
+    async fn local_file(&mut self) -> std::io::Result<LocalFile> {
         let local_file_header = {
             const STRUCT_SIZE: usize = 2 * 5 + 4 * 3 + 2 * 2;
-            self.ensure(STRUCT_SIZE)?;
+            self.ensure(STRUCT_SIZE).await?;
 
-            let version = self.read_u16()?;
-            let flags = self.read_u16()?;
-            let compression_method = Compression::try_from(self.read_u16()? as usize)
+            let version = self.read_u16().await?;
+            let flags = self.read_u16().await?;
+            let compression_method = Compression::try_from(self.read_u16().await? as usize)
                 .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::InvalidData))?;
-            let file_mod_time = self.read_u16()?;
-            let file_mod_date = self.read_u16()?;
-            let crc32 = self.read_u32()?;
-            let len_body_compressed = self.read_u32()?;
-            let len_body_uncompressed = self.read_u32()?;
-            let len_filename = self.read_u16()?;
-            let len_extra = self.read_u16()?;
+            let file_mod_time = self.read_u16().await?;
+            let file_mod_date = self.read_u16().await?;
+            let crc32 = self.read_u32().await?;
+            let len_body_compressed = self.read_u32().await?;
+            let len_body_uncompressed = self.read_u32().await?;
+            let len_filename = self.read_u16().await?;
+            let len_extra = self.read_u16().await?;
 
-            self.ensure(len_filename as usize)?;
-            let filename = self.read_str(len_filename as usize)?;
+            self.ensure(len_filename as usize).await?;
+            let filename = self.read_str(len_filename as usize).await?;
 
             LocalFileHeader {
                 version,
@@ -291,20 +293,20 @@ impl ZipFile {
         })
     }
 
-    fn end_of_central_dir(&mut self) -> std::io::Result<EndOfCentralDir> {
+    async fn end_of_central_dir(&mut self) -> std::io::Result<EndOfCentralDir> {
         const STRUCT_SIZE: usize = 2 * 4 + 4 * 2 + 2 * 1;
-        self.ensure(STRUCT_SIZE)?;
+        self.ensure(STRUCT_SIZE).await?;
 
-        let disk_of_end_of_central_dir = self.read_u16()?;
-        let disk_of_central_dir = self.read_u16()?;
-        let num_central_dir_entries_on_disk = self.read_u16()?;
-        let num_central_dir_entries_total = self.read_u16()?;
-        let len_central_dir = self.read_u32()?;
-        let ofs_central_dir = self.read_u32()?;
-        let len_comment = self.read_u16()?;
+        let disk_of_end_of_central_dir = self.read_u16().await?;
+        let disk_of_central_dir = self.read_u16().await?;
+        let num_central_dir_entries_on_disk = self.read_u16().await?;
+        let num_central_dir_entries_total = self.read_u16().await?;
+        let len_central_dir = self.read_u32().await?;
+        let ofs_central_dir = self.read_u32().await?;
+        let len_comment = self.read_u16().await?;
 
-        self.ensure(len_comment as usize)?;
-        let comment = self.read_str(len_comment as usize)?;
+        self.ensure(len_comment as usize).await?;
+        let comment = self.read_str(len_comment as usize).await?;
 
         Ok(EndOfCentralDir {
             disk_of_end_of_central_dir,
@@ -317,20 +319,25 @@ impl ZipFile {
             comment,
         })
     }
+
+    async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.file.read(buf).await
+    }
 }
 
+#[async_trait]
 impl FileType for ZipFile {
     type EntryType = SectionBody;
 
-    fn read_entry(&mut self) -> std::io::Result<Entry<Self::EntryType>> {
+    async fn read_entry(&mut self) -> std::io::Result<Entry<Self::EntryType>> {
         let start_pos = self.seek(SeekFrom::Current(0)).unwrap(); //get the current cursor
-        let section = self.read_section()?;
+        let section = self.read_section().await?;
         let end_pos = self.seek(SeekFrom::Current(0)).unwrap();
 
         Ok(Entry::new(section, start_pos, end_pos))
     }
 
-    fn start_from(&mut self, start: usize) -> std::io::Result<u64> {
+    async fn start_from(&mut self, start: usize) -> std::io::Result<u64> {
         const READ_SIZE: usize = 4096;
         const VALID_HEADERS: [&[u8]; 4] = [
             &0x02014b50u32.to_le_bytes(), // CentralDirectory
@@ -343,8 +350,8 @@ impl FileType for ZipFile {
 
         let _is_seeked = self.seek(SeekFrom::Start(start as u64))?;
         loop {
-            let total_ensured = self.ensure(READ_SIZE)?;
-            let data = self.read_bytes(READ_SIZE)?;
+            let total_ensured = self.ensure(READ_SIZE).await?;
+            let data = self.read_bytes(READ_SIZE).await?;
 
             if let Some(position) = data
                 .windows(WINDOW_SIZE)
@@ -356,57 +363,53 @@ impl FileType for ZipFile {
             };
         }
     }
+
 }
 
-impl Iterator for ZipFile {
-    type Item = std::io::Result<Entry<SectionBody>>;
 
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(self.read_entry())
-    }
-}
+#[async_trait]
 impl NReader for ZipFile {
-    fn read_str(&mut self, size: usize) -> std::io::Result<String> {
-        let bytes = self.read_bytes(size)?;
+    async fn read_str(&mut self, size: usize) -> std::io::Result<String> {
+        let bytes = self.read_bytes(size).await?;
 
         Ok(std::str::from_utf8(bytes)
             .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::InvalidData))?
             .to_string())
     }
 
-    fn read_bytes(&mut self, size: usize) -> std::io::Result<&[u8]> {
-        self.__read(size)
+    async fn read_bytes(&mut self, size: usize) -> std::io::Result<&[u8]> {
+        self.__read(size).await
     }
 
-    fn read_u8(&mut self) -> std::io::Result<u8> {
-        Ok(self.read_bytes(1)?[0])
+    async fn read_u8(&mut self) -> std::io::Result<u8> {
+        Ok(self.read_bytes(1).await?[0])
     }
 
-    fn read_u16(&mut self) -> std::io::Result<u16> {
-        Ok(u16::from_le_bytes(self.read_arr(2)?))
+    async fn read_u16(&mut self) -> std::io::Result<u16> {
+        Ok(u16::from_le_bytes(self.read_arr(2).await?))
     }
 
-    fn read_u32(&mut self) -> std::io::Result<u32> {
-        Ok(u32::from_le_bytes(self.read_arr(4)?))
+    async fn read_u32(&mut self) -> std::io::Result<u32> {
+        Ok(u32::from_le_bytes(self.read_arr(4).await?))
     }
 
-    fn read_u64(&mut self) -> std::io::Result<u64> {
-        Ok(u64::from_le_bytes(self.read_arr(8)?))
+    async fn read_u64(&mut self) -> std::io::Result<u64> {
+        Ok(u64::from_le_bytes(self.read_arr(8).await?))
     }
 
-    fn read_arr<const N: usize>(&mut self, size: usize) -> std::io::Result<[u8; N]> {
+    async fn read_arr<const N: usize>(&mut self, size: usize) -> std::io::Result<[u8; N]> {
         let mut array = [0u8; N];
-        let mut _buf = self.__read(size)?;
+        let mut _buf = self.__read(size).await?;
         _buf.iter().zip(array.iter_mut()).for_each(|(x, y)| *y = *x);
 
         Ok(array)
     }
 
-    fn __read(&mut self, size: usize) -> std::io::Result<&[u8]> {
+    async fn __read(&mut self, size: usize) -> std::io::Result<&[u8]> {
         if self.buf_offset == self.buf.len() {
             // the buf is full
             self.buf_offset = 0;
-            self.ensure(size)?;
+            self.ensure(size).await?;
         }
 
         assert!(self.buf.len() >= (self.buf_offset + size)); // check if the buf len is not ensured
@@ -426,11 +429,7 @@ impl Debug for Entry<SectionBody> {
             .finish()
     }
 }
-impl Read for ZipFile {
-    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        self.file.read(buf)
-    }
-}
+
 
 impl Seek for ZipFile {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {

@@ -27,13 +27,14 @@ struct Opt {
     offset: usize,
 }
 
-fn decide_archive(remote_file: RemoteFile) -> impl Iterator<Item = impl Debug> + FileType {
-    match remote_file.content_type() {
-        remote_file::SupportedTypes::Zip => zip::ZipFile::new(remote_file),
-        remote_file::SupportedTypes::Unsupported => todo!(),
-    }
-}
-fn main() -> std::io::Result<()> {
+// fn decide_archive(remote_file: RemoteFile) -> impl Iterator<Item = impl Debug> + FileType {
+//     match remote_file.content_type() {
+//         remote_file::SupportedTypes::Zip => zip::ZipFile::new(remote_file),
+//         remote_file::SupportedTypes::Unsupported => todo!(),
+//     }
+// }
+#[tokio::main]
+async fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
 
     let _ = Url::parse(&opt.url).expect("the provided url should be a valid url");
@@ -50,15 +51,16 @@ fn main() -> std::io::Result<()> {
     let remote_file = RemoteFile::try_new(client, &opt.url)
         .expect("the target server is not reachable or it is not supporting the range header");
 
-    let mut archive = decide_archive(remote_file);
+    let mut archive = zip::ZipFile::new(remote_file);
 
     if opt.offset != 0 {
-        let _start_from = archive.start_from(opt.offset)?;
+        let _start_from = archive.start_from(opt.offset).await?;
     }
 
-    for entry in archive {
-        dbg!(&entry);
+    while let Ok(entry) = archive.read_entry().await {
+            dbg!(&entry);
     }
+
 
     Ok(())
 }

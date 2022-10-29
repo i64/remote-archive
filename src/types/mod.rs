@@ -1,5 +1,5 @@
 use std::ops::Range;
-
+use async_trait::async_trait;
 pub mod zip;
 
 pub struct Entry<T> {
@@ -15,9 +15,11 @@ impl<T> Entry<T> {
         }
     }
 }
+
+#[async_trait]
 pub trait FileType {
     type EntryType;
 
-    fn read_entry(&mut self) -> std::io::Result<Entry<Self::EntryType>>;
-    fn start_from(&mut self, start: usize) -> std::io::Result<u64>;
+    async fn read_entry(&mut self) -> std::io::Result<Entry<Self::EntryType>>;
+    async fn start_from(&mut self, start: usize) -> std::io::Result<u64>;
 }
