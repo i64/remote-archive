@@ -8,8 +8,8 @@ use remote_file::RemoteFile;
 use types::{zip, FileType};
 
 use structopt::StructOpt;
-use ureq::Proxy;
-use url::Url;
+// use ureq::Proxy;
+// use url::Url;
 
 #[derive(StructOpt, Debug)]
 #[structopt(name = "basic")]
@@ -37,18 +37,19 @@ struct Opt {
 async fn main() -> std::io::Result<()> {
     let opt = Opt::from_args();
 
-    let _ = Url::parse(&opt.url).expect("the provided url should be a valid url");
+    // let _ = Url::parse(&opt.url).expect("the provided url should be a valid url");
 
-    let mut agent_builder = ureq::AgentBuilder::new();
+    let mut agent_builder = reqwest::ClientBuilder::new();
 
     if let Some(opt_proxy) = opt.proxy {
-        let proxy =
-            Proxy::new(opt_proxy).expect("the provided poxy url should be a valid proxy url");
+        let proxy = reqwest::Proxy::all(opt_proxy)
+            .expect("the provided poxy url should be a valid proxy url");
         agent_builder = agent_builder.proxy(proxy);
     }
 
-    let client = agent_builder.build();
+    let client = agent_builder.build().unwrap();
     let remote_file = RemoteFile::try_new(client, &opt.url)
+        .await
         .expect("the target server is not reachable or it is not supporting the range header");
 
     let mut archive = zip::ZipFile::new(remote_file);
@@ -58,9 +59,8 @@ async fn main() -> std::io::Result<()> {
     }
 
     while let Ok(entry) = archive.read_entry().await {
-            dbg!(&entry);
+        dbg!(&entry);
     }
-
 
     Ok(())
 }

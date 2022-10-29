@@ -181,12 +181,16 @@ impl ZipFile {
             .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::InvalidData))?;
 
         let section_body = match section_type {
-            SectionType::CentralDirEntry => SectionBody::CentralDirEntry(self.central_dir_entry().await?),
+            SectionType::CentralDirEntry => {
+                SectionBody::CentralDirEntry(self.central_dir_entry().await?)
+            }
             SectionType::LocalFile => SectionBody::LocalFile(self.local_file().await?),
             SectionType::EndOfCentralDir => {
                 SectionBody::EndOfCentralDir(self.end_of_central_dir().await?)
             }
-            SectionType::DataDescriptor => SectionBody::DataDescriptor(self.data_descriptor().await?),
+            SectionType::DataDescriptor => {
+                SectionBody::DataDescriptor(self.data_descriptor().await?)
+            }
         };
 
         Ok(section_body)
@@ -363,9 +367,7 @@ impl FileType for ZipFile {
             };
         }
     }
-
 }
-
 
 #[async_trait]
 impl NReader for ZipFile {
@@ -429,7 +431,6 @@ impl Debug for Entry<SectionBody> {
             .finish()
     }
 }
-
 
 impl Seek for ZipFile {
     fn seek(&mut self, pos: std::io::SeekFrom) -> std::io::Result<u64> {

@@ -6,6 +6,8 @@ use std::{
     ops::Range,
 };
 
+use reqwest::{self};
+
 const PARTIAL_CONTENT: u16 = 206;
 
 const CONTENT_RANGE: &str = "Content-Range";
@@ -13,7 +15,7 @@ const CONTENT_TYPE: &str = "Content-Type";
 const RANGE: &str = "Range";
 
 pub struct RemoteFile {
-    client: ureq::Agent,
+    client: reqwest::Client,
     url: String,
     content_type: SupportedTypes,
     size: usize,
@@ -36,8 +38,8 @@ impl From<&str> for SupportedTypes {
 }
 
 impl RemoteFile {
-    pub fn try_new(client: ureq::Agent, url: &str) -> Option<Self> {
-        let (content_type, total_len) = check_range(&client, url)?;
+    pub async fn try_new(client: reqwest::Client, url: &str) -> Option<Self> {
+        let (content_type, total_len) = check_range(&client, url).await?;
         Some(Self {
             client,
             content_type,
@@ -50,12 +52,16 @@ impl RemoteFile {
     pub fn content_type(&self) -> SupportedTypes {
         self.content_type
     }
-    async fn do_range_request(&mut self, range: Range<usize>) -> Result<ureq::Response, ureq::Error> {
+    async fn do_range_request(
+        &mut self,
+        range: Range<usize>,
+    ) -> Result<reqwest::Response, reqwest::Error> {
         dbg!(&range);
         self.client
             .get(&self.url)
-            .set(RANGE, &format!("bytes={}-{}", range.start, range.end))
-            .call()
+            .header(RANGE, &format!("bytes={}-{}", range.start, range.end))
+            .send()
+            .await
     }
 
     pub async fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
@@ -64,16 +70,15 @@ impl RemoteFile {
             .await
             .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::Other))?;
 
-        let mut vec = Vec::with_capacity(buf.len());
+        let response_data = response
+            .bytes()
+            .await
+            .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::Other))?;
+        let response_size = response_data.len();
+        dbg!(&response_data, response_size);
+        buf.copy_from_slice(&response_data[..buf.len()]);
 
-        let response_size = response
-            .into_reader()
-            .take(buf.len() as u64)
-            .read_to_end(&mut vec)?;
-
-        buf.copy_from_slice(&vec);
-
-        self.offset += response_size;
+        self.offset += (response_size - 1);
 
         Ok(response_size)
     }
@@ -105,11 +110,11 @@ impl Seek for RemoteFile {
     }
 }
 
-pub fn check_range(client: &ureq::Agent, url: &str) -> Option<(SupportedTypes, usize)> {
-    if let Ok(resp) = do_range_request(client, url, 0..1) {
+pub async fn check_range(client: &reqwest::Client, url: &str) -> Option<(SupportedTypes, usize)> {
+    if let Ok(resp) = do_range_request(client, url, 0..1).await {
         if resp.status() == PARTIAL_CONTENT {
-            let content_range = resp.header(CONTENT_RANGE)?;
-            let content_type = resp.header(CONTENT_TYPE)?;
+            let content_range = resp.headers().get(CONTENT_RANGE)?.to_str().ok()?;
+            let content_type = resp.headers().get(CONTENT_TYPE)?.to_str().ok()?;
 
             let mut splited_range = content_range.split('/');
             splited_range.next();
@@ -122,13 +127,14 @@ pub fn check_range(client: &ureq::Agent, url: &str) -> Option<(SupportedTypes, u
     None
 }
 
-fn do_range_request(
-    client: &ureq::Agent,
+async fn do_range_request(
+    client: &reqwest::Client,
     url: &str,
     range: Range<usize>,
-) -> Result<ureq::Response, ureq::Error> {
+) -> Result<reqwest::Response, reqwest::Error> {
     client
         .get(url)
-        .set(RANGE, &format!("bytes={}-{}", range.start, range.end))
-        .call()
+        .header(RANGE, &format!("bytes={}-{}", range.start, range.end))
+        .send()
+        .await
 }
