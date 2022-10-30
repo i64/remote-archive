@@ -3,8 +3,8 @@ use std::ops::Range;
 pub mod zip;
 
 pub struct Entry<T> {
-    entry: T,
-    range: Range<u64>,
+    pub entry: T,
+    pub range: Range<u64>,
 }
 
 impl<T> Entry<T> {
@@ -21,5 +21,5 @@ pub trait FileType {
     type EntryType;
 
     async fn read_entry(&mut self) -> std::io::Result<Entry<Self::EntryType>>;
-    async fn start_from(&mut self, start: usize) -> std::io::Result<u64>;
+    async fn start_from(&mut self, start: usize, haystack_size: usize) -> std::io::Result<u64>;
 }

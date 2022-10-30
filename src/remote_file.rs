@@ -14,11 +14,12 @@ const CONTENT_RANGE: &str = "Content-Range";
 const CONTENT_TYPE: &str = "Content-Type";
 const RANGE: &str = "Range";
 
+#[derive(Clone)]
 pub struct RemoteFile {
     client: reqwest::Client,
     url: String,
     content_type: SupportedTypes,
-    size: usize,
+    pub size: usize,
     offset: usize,
 }
 
@@ -74,11 +75,15 @@ impl RemoteFile {
             .bytes()
             .await
             .map_err(|_| Into::<std::io::Error>::into(std::io::ErrorKind::Other))?;
-        let response_size = response_data.len();
-        dbg!(&response_data, response_size);
-        buf.copy_from_slice(&response_data[..buf.len()]);
 
-        self.offset += (response_size - 1);
+        let response_size = response_data.len() - 1;
+
+        assert!(buf.len() >= response_size);
+
+        // idk why it appends '\n'
+        buf.copy_from_slice(&response_data[..(response_size)]);
+
+        self.offset += response_size;
 
         Ok(response_size)
     }

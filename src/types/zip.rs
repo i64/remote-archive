@@ -143,6 +143,7 @@ struct PkSection {
     section_body: SectionBody,
 }
 
+#[derive(Clone)]
 pub struct ZipFile {
     buf_offset: usize,
     file: RemoteFile,
@@ -341,8 +342,7 @@ impl FileType for ZipFile {
         Ok(Entry::new(section, start_pos, end_pos))
     }
 
-    async fn start_from(&mut self, start: usize) -> std::io::Result<u64> {
-        const READ_SIZE: usize = 4096;
+    async fn start_from(&mut self, start: usize, haystack_size: usize) -> std::io::Result<u64> {
         const VALID_HEADERS: [&[u8]; 4] = [
             &0x02014b50u32.to_le_bytes(), // CentralDirectory
             &0x04034b50u32.to_le_bytes(), // LocalFileHeader
@@ -354,8 +354,8 @@ impl FileType for ZipFile {
 
         let _is_seeked = self.seek(SeekFrom::Start(start as u64))?;
         loop {
-            let total_ensured = self.ensure(READ_SIZE).await?;
-            let data = self.read_bytes(READ_SIZE).await?;
+            let total_ensured = self.ensure(haystack_size).await?;
+            let data = self.read_bytes(haystack_size).await?;
 
             if let Some(position) = data
                 .windows(WINDOW_SIZE)

@@ -2,65 +2,110 @@ mod reader;
 mod remote_file;
 mod types;
 
-use std::fmt::Debug;
+use futures::{
+    future,
+    stream::{self, StreamExt},
+};
+use std::{fmt::Debug, sync::Arc};
 
 use remote_file::RemoteFile;
 use types::{zip, FileType};
 
-use structopt::StructOpt;
-// use ureq::Proxy;
-// use url::Url;
+// use structopt::StructOpt;
+use argh::FromArgs;
 
-#[derive(StructOpt, Debug)]
-#[structopt(name = "basic")]
-struct Opt {
-    /// The remote url for the target file
-    #[structopt(short, long)]
+const STEP_SIZE: usize = {
+    let K = 1024usize;
+    let one_byte = 1;
+    let one_kb = K * one_byte;
+    let one_mb = K * one_kb;
+    let one_gb = K * one_mb;
+    5 * one_gb
+};
+
+#[derive(FromArgs, Debug)]
+/// ...
+struct Args {
+    /// the remote url for the target file
+    #[argh(option, short = 'u')]
     url: String,
 
-    /// Use the specified proxy
-    #[structopt(short, long)]
+    /// use the specified proxy
+    #[argh(option, short = 'p')]
     proxy: Option<String>,
 
-    /// Use the specified offset
-    #[structopt(short, long, default_value = "0")]
+    /// use the specified offset
+    #[argh(option, short = 'o', default = "0")]
     offset: usize,
+
+    /// workers count
+    #[argh(option, short = 'w', default = "10")]
+    workers: usize,
+
+    /// chunk size for a single worker
+    #[argh(option, default = "STEP_SIZE")]
+    worker_chunk_size: usize,
+
+    /// haystack size for the offset based search
+    #[argh(option, default = "4096")]
+    haystack_size: usize,
+}
+// TODO: ALIGN MAP
+async fn task_executer<A>(archive: &mut A, offset: usize, chunk_size: usize, haystack_size: usize)
+where
+    A: FileType,
+    types::Entry<<A as types::FileType>::EntryType>: Debug,
+{
+    dbg!(offset);
+    if matches!(archive.start_from(offset, haystack_size).await, Err(_)) {
+        return;
+    }
+
+    while let Ok(entry) = archive.read_entry().await {
+        println!("yielding from {offset}, {}", entry.range.end);
+        dbg!(&entry);
+
+        if entry.range.end >= (offset + chunk_size) as u64 {
+            break;
+        }
+    }
 }
 
-// fn decide_archive(remote_file: RemoteFile) -> impl Iterator<Item = impl Debug> + FileType {
-//     match remote_file.content_type() {
-//         remote_file::SupportedTypes::Zip => zip::ZipFile::new(remote_file),
-//         remote_file::SupportedTypes::Unsupported => todo!(),
-//     }
-// }
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
-    let opt = Opt::from_args();
+    let opt: Args = argh::from_env();
 
-    // let _ = Url::parse(&opt.url).expect("the provided url should be a valid url");
-
-    let mut agent_builder = reqwest::ClientBuilder::new();
+    let mut client_builder = reqwest::ClientBuilder::new();
 
     if let Some(opt_proxy) = opt.proxy {
         let proxy = reqwest::Proxy::all(opt_proxy)
             .expect("the provided poxy url should be a valid proxy url");
-        agent_builder = agent_builder.proxy(proxy);
+        client_builder = client_builder.proxy(proxy);
     }
 
-    let client = agent_builder.build().unwrap();
+    let client = client_builder.build().unwrap();
     let remote_file = RemoteFile::try_new(client, &opt.url)
         .await
         .expect("the target server is not reachable or it is not supporting the range header");
 
+    let size = remote_file.size;
     let mut archive = zip::ZipFile::new(remote_file);
 
-    if opt.offset != 0 {
-        let _start_from = archive.start_from(opt.offset).await?;
-    }
+    let fut = stream::repeat(archive)
+        .zip(stream::iter(
+            (opt.offset..size).step_by(opt.worker_chunk_size),
+        ))
+        .for_each_concurrent(opt.workers, |(mut archive, offset)| async move {
+            task_executer(
+                &mut archive,
+                offset,
+                opt.worker_chunk_size,
+                opt.haystack_size,
+            )
+            .await;
+        });
 
-    while let Ok(entry) = archive.read_entry().await {
-        dbg!(&entry);
-    }
+    fut.await;
 
     Ok(())
 }

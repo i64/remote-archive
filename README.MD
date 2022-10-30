@@ -5,7 +5,8 @@ Remote-Archive is a utility for exploring remote archive files without downloadi
 The idea behind it is to use the `Range` HTTP header to read the entries' metadata and skip the content of the entries in the archive.
 
 - [x] Option for using custom offsets
-- [ ] Specificing the thread count
+- [x] Async
+- [x] Specificing the thread count
 - [ ] Option for downloading a specific file
 - [ ] File types
     - [x] ZIP
@@ -16,7 +17,7 @@ The idea behind it is to use the `Range` HTTP header to read the entries' metada
 ### an example usage (exploring the zip file from the middle of it (450GB)): 
 
 ```
-$ cargo run -- --url 'http://foo.bar/a.zip'  --offset=255194890075 --proxy socks5://127.0.0.1:9050
+$ cargo run -- --url 'http://foo.bar/a.zip' -o 255194890075 --proxy socks5h://127.0.0.1:9050 -w 1 --haystack-size $(( 4 * 1024 ))
 
 [src/remote_file.rs:54] &range = 255194890075..255194894171
 [src/remote_file.rs:54] &range = 255194890078..255194890082
