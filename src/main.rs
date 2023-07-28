@@ -1,42 +1,66 @@
-mod reader;
-mod remote_file;
-mod types;
+mod adapter;
+mod file_types;
+mod utils;
 
-use std::fmt::Debug;
-
-use remote_file::RemoteFile;
-use types::{zip, FileType};
-
-use structopt::StructOpt;
-use ureq::Proxy;
+use argh::FromArgs;
+use exact_reader::{ExactReader, MultiFile};
+use file_types::FileType;
 use url::Url;
+use utils::{build_tree, display_tree};
 
-#[derive(StructOpt, Debug)]
-#[structopt(name = "basic")]
-struct Opt {
-    /// The remote url for the target file
-    #[structopt(short, long)]
-    url: String,
+use adapter::RemoteAdapter;
+use ureq::Proxy;
 
-    /// Use the specified proxy
-    #[structopt(short, long)]
+const HELP: &str = concat!(
+    "Usage: {remote_archive} [--url <url>] [-f <file>] [-p <proxy>] [-t]\n\n",
+    "Options:\n",
+    "  --url             the URL to download(mutually exclusive with 'file')\n",
+    "  -f, --file        the file to process (mutually exclusive with 'url')\n",
+    "  -p, --proxy       the proxy server to use\n",
+    "  -t, --tree        to show file contents as tree\n",
+    "  --help            display usage information"
+);
+
+pub fn new_multi<S: AsRef<str>>(
+    client: &ureq::Agent,
+    urls: Vec<S>,
+) -> ExactReader<MultiFile<RemoteAdapter>> {
+    let files = urls
+        .iter()
+        .map(|url| dbg!(url.as_ref()))
+        .map(|url| RemoteAdapter::try_new(client.clone(), url).unwrap().into())
+        .collect();
+    let multifile = MultiFile::new(files);
+
+    ExactReader::new_multi(multifile)
+}
+#[derive(FromArgs)]
+/// A utility for exploring remote archive files without downloading the entire contents of the archive
+struct Arguments {
+    #[argh(option, long = "url")]
+    /// the URL to download (mutually exclusive with 'file')
+    url: Option<String>,
+
+    #[argh(option, long = "file", short = 'f')]
+    /// the file to process (mutually exclusive with 'url')
+    file: Option<String>,
+
+    #[argh(option, long = "proxy", short = 'p')]
+    /// the proxy server to use
     proxy: Option<String>,
 
-    /// Use the specified offset
-    #[structopt(short, long, default_value = "0")]
-    offset: usize,
-}
-
-fn decide_archive(remote_file: RemoteFile) -> impl Iterator<Item = impl Debug> + FileType {
-    match remote_file.content_type() {
-        remote_file::SupportedTypes::Zip => zip::ZipFile::new(remote_file),
-        remote_file::SupportedTypes::Unsupported => todo!(),
-    }
+    #[argh(switch, long = "tree", short = 't')]
+    /// to show file contents as tree
+    tree: bool,
 }
 fn main() -> std::io::Result<()> {
-    let opt = Opt::from_args();
+    let opt: Arguments = argh::from_env();
 
-    let _ = Url::parse(&opt.url).expect("the provided url should be a valid url");
+    if opt.file.is_some() && opt.url.is_some() {
+        eprintln!("Error: Options --file and --url are mutually exclusive.");
+        eprintln!("{HELP}");
+        std::process::exit(1);
+    }
 
     let mut agent_builder = ureq::AgentBuilder::new();
 
@@ -47,18 +71,33 @@ fn main() -> std::io::Result<()> {
     }
 
     let client = agent_builder.build();
-    let remote_file = RemoteFile::try_new(client, &opt.url)
-        .expect("the target server is not reachable or it is not supporting the range header");
 
-    let mut archive = decide_archive(remote_file);
+    let reader = {
+        if let Some(url) = opt.url {
+            let _ = Url::parse(&url).expect("the provided url should be a valid url");
+            new_multi(&client, vec![url])
+        } else if let Some(filename) = opt.file {
+            let file_data = std::fs::read(filename)?;
+            let urls: Vec<_> = String::from_utf8_lossy(&file_data)
+                .lines()
+                .map(|l| l.to_owned())
+                .collect();
 
-    if opt.offset != 0 {
-        let _start_from = archive.start_from(opt.offset)?;
+            new_multi(&client, urls)
+        } else {
+            eprintln!("{HELP}");
+            std::process::exit(1);
+        }
+    };
+
+    let mut zip = file_types::zip::ZipFile::new(reader);
+    let paths_iter = zip.entry_iter()?.map(|e| e.filename);
+    if opt.tree {
+        let paths = paths_iter.collect();
+        let tree = build_tree(paths);
+        display_tree(&tree, 0);
+    } else {
+        paths_iter.for_each(|p| println!("{p}"))
     }
-
-    for entry in archive {
-        dbg!(&entry);
-    }
-
     Ok(())
 }
